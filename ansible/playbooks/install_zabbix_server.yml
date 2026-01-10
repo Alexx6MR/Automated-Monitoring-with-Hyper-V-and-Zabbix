@@ -1,0 +1,8 @@
+---
+- name: Deploy Zabbix Infrastructure
+  hosts: all
+  become: yes
+  roles:
+    - base-config
+    - zabbix-server
+

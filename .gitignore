@@ -1,0 +1,39 @@
+# Hyper-V artifacts
+*.vhd
+*.vhdx
+*.avhdx
+*.vmcx
+*.vmrs
+
+# ISOs
+*.iso
+
+# Templates (artifacts only)
+templates/*
+!templates/README.md
+
+powershell/secrets/*
+
+# VM runtime data
+vms/*
+!vms/README.md
+
+# Secrets
+*.env
+*.secrets
+*.key
+*.pem
+*.pfx
+*.cer
+
+# Logs & temp
+*.log
+*.tmp
+*.cache
+
+# Windows junk
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/

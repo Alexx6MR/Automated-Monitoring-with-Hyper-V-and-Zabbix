@@ -1,0 +1,10 @@
+---
+- name: restart zabbix-services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - zabbix-server
+    - zabbix-agent2
+    - httpd
+    - mariadb

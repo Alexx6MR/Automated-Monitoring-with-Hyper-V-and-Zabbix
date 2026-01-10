@@ -1,0 +1,112 @@
+---
+# 1. System Preparation
+- name: Wait for cloud-init to finish
+  ansible.builtin.command: cloud-init status --wait
+  changed_when: false
+  failed_when: false
+
+- name: Install Zabbix Official Repository
+  ansible.builtin.dnf:
+    name: "{{ repo_rpm_url }}"
+    state: present
+    disable_gpg_check: true
+
+# 2. Database Engine Installation
+- name: Install MariaDB Server and MySQL Python dependencies
+  ansible.builtin.dnf:
+    name:
+      - mariadb-server
+      - python3-PyMySQL
+    state: present
+
+- name: Ensure MariaDB is started and enabled
+  ansible.builtin.systemd:
+    name: mariadb
+    state: started
+    enabled: true
+
+# 3. Zabbix Database & User Creation
+- name: Create Zabbix database
+  community.mysql.mysql_db:
+    name: zabbix
+    encoding: utf8mb4
+    collation: utf8mb4_bin
+    login_unix_socket: /var/lib/mysql/mysql.sock
+
+- name: Create Zabbix database user
+  community.mysql.mysql_user:
+    name: zabbix
+    password: "{{ db_password }}"
+    priv: 'zabbix.*:ALL'
+    login_unix_socket: /var/lib/mysql/mysql.sock
+
+# 4. Zabbix Core Installation
+- name: Install Zabbix Server, Web Frontend, and Agent 2
+  ansible.builtin.dnf:
+    name:
+      - zabbix-server-mysql
+      - zabbix-web-mysql
+      - zabbix-apache-conf
+      - zabbix-sql-scripts
+      - zabbix-selinux-policy
+      - zabbix-agent2
+    state: present
+
+- name: Import initial Database schema
+  ansible.builtin.shell: |
+    zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql -uzabbix -p{{ db_password }} zabbix
+  args:
+    creates: /var/lib/mysql/zabbix/hosts.ibd
+
+# 5. Configuration & Templating
+- name: Configure Database password in zabbix_server.conf
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_server.conf
+    regexp: '^# DBPassword='
+    line: "DBPassword={{ db_password }}"
+  notify: restart zabbix-services
+
+- name: Configure Zabbix Frontend (PHP Template)
+  ansible.builtin.template:
+    src: zabbix.conf.php.j2
+    dest: /etc/zabbix/web/zabbix.conf.php
+    owner: apache
+    group: apache
+    mode: '0644'
+
+- name: Set PHP Timezone in php.ini
+  ansible.builtin.lineinfile:
+    path: /etc/php.ini
+    regexp: '^;date.timezone ='
+    line: "date.timezone = {{ timezone }}"
+  notify: restart zabbix-services
+
+# 6. Security & Permissions
+- name: Allow Apache to connect to Database (SELinux)
+  ansible.posix.seboolean:
+    name: httpd_can_network_connect_db
+    state: true
+    persistent: true
+
+- name: Allow Apache to connect to Zabbix Server network (SELinux)
+  ansible.posix.seboolean:
+    name: httpd_can_network_connect
+    state: true
+    persistent: true
+
+- name: Ensure Zabbix Agent 2 Configuration
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_agent2.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^ServerActive=', line: 'ServerActive=127.0.0.1' }
+    - { regexp: '^Hostname=', line: "Hostname={{ inventory_hostname }}" }
+  notify: restart zabbix-services
+
+# Flush handlers to ensure services are up before finishing the play
+- name: Force all notified handlers to run at this point
+  ansible.builtin.meta: flush_handlers
+
+
+
