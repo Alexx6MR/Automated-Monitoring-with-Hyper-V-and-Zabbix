@@ -108,20 +108,19 @@ do {
                 # Paso 4: Ejecución de Ansible
                 Invoke-Task "Executing Ansible Playbook (Zabbix Installation)" -Task {
 
+                    #$global:serverIP = "192.168.1.248" # <-- borrar esto despues
+
                     if ([string]::IsNullOrWhiteSpace($global:serverIP)) { throw "La IP del servidor es nula o vacía." }
                     if ([string]::IsNullOrWhiteSpace($global:LinuxPlaybookPath)) { throw "Error: Ruta del Playbook no definida." }
                     # Usamos la IP detectada dinámicamente
 
+                    
                     $Inventory = "$($global:serverIP),"
 
                     $ansibleArgs = @(
                         "ansible-playbook",
                         "-i", "$Inventory",
                         "-e", "ansible_host=$global:serverIP",
-                        "-e", "ansible_user=deploy",
-                        "-e", "ansible_ssh_private_key_file=~/.ssh/deploy_key",
-                        "-e", "ansible_ssh_common_args='-o StrictHostKeyChecking=no'",
-                        "-e", "target_hosts=all",
                         "$global:LinuxPlaybookPath"
                     )
                 
@@ -141,22 +140,113 @@ do {
             }
         }
         "2" {
-            $RawInput = Read-Host "`n -> How many VMs do you want to create?"
-            if ($RawInput -as [int]) {
-                $Count = [int]$RawInput
-                for ($i = 1; $i -le $Count; $i++) {
-                    $ChosenName = "Zabbix-Node-$i"
-                    Write-SectionHeader -Title "Deploying $ChosenName"
-                    
-                    Invoke-Task "Creating VM: $ChosenName" -Task {
-                        & $CreateVmScript -VMName $ChosenName -TemplatesDir $TemplatesDir -TemplatePath $TemplatePath -TemplateUrl $TemplateUrl -VMsDir $VMsDir -CloudInitPath $CloudInitPath -PrivKey $PrivKey -UserDataTemplateScript $UserDataTemplateScript -MetaDataTemplateScript $MetaDataTemplateScript
-                    }
-                    
-                    Invoke-Task "Verifying Network for $ChosenName" -Task {
-                        Get-VMIPAddress -VMName $ChosenName
-                    }
+            # 1. PLANIFICACIÓN (Recoger nombres)
+            # $RawInput = Read-Host "`n -> How many VMs do you want to create?"
+            # if ($RawInput -as [int]) {
+            #     $Count = [int]$RawInput
+            #     $PendingVMs = @() # Lista de nombres que aún no tienen IP
+
+            # for ($i = 1; $i -le $Count; $i++) {
+            #     $Name = Read-Host " -> Name for VM #$i"
+            #     if ([string]::IsNullOrWhiteSpace($Name)) { $Name = "Zabbix-Node-$i" }
+            #     $PendingVMs += $Name
+            # }
+
+            # 2. CREACIÓN MASIVA
+            # Write-SectionHeader -Title "PHASE 1: PROVISIONING $Count VMs"
+            # foreach ($Name in $PendingVMs) {
+                
+            #     Invoke-Task "Creating $Name" -SkipCondition ([bool](Get-VM -Name $Name -ErrorAction SilentlyContinue)) -Task {
+            #         & $CreateVmScript -VMName $Name `
+            #             -TemplatesDir $TemplatesDir -TemplatePath $TemplatePath -TemplateUrl $TemplateUrl `
+            #             -VMsDir $VMsDir -CloudInitPath $CloudInitPath -PrivKey $PrivKey `
+            #             -UserDataTemplateScript $UserDataTemplateScript -MetaDataTemplateScript $MetaDataTemplateScript
+
+            #             if ($LASTEXITCODE -ne 0) { throw "El aprovisionamiento de la VM falló. Abortando despliegue." }
+            #     }
+                
+            # }
+
+            # 3. BUCLE DE BÚSQUEDA INTELIGENTE (Polling Loop)
+            # Write-SectionHeader -Title "PHASE 2: ASYNCHRONOUS IP DISCOVERY"
+            # $CompletedNodes = @() # Lista de objetos {name, ip}
+
+            # while ($PendingVMs.Count -gt 0) {
+            #     $StillPending = @() # Temporal para las que siguen sin IP en esta ronda
+            
+            #     foreach ($VMName in $PendingVMs) {
+            #         # Intentamos obtener la IP de forma rápida (sin timeout largo)
+            #         $VM = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+            #         $IP = $VM.NetworkAdapters.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
+
+            #         if ($null -ne $IP) {
+            #             Write-Host " [V] IP Found for $VMName : $IP" -ForegroundColor Green
+            #             # Guardamos el objeto y lo sacamos de la lista de pendientes
+            #             $CompletedNodes += [PSCustomObject]@{ Name = $VMName; IP = $IP }
+            #             Show-NodeBox -VMName $VMName -IP $IP
+            #         } else {
+            #             $StillPending += $VMName
+            #         }
+            #     }
+
+            #     $PendingVMs = $StillPending
+            
+            #     if ($PendingVMs.Count -gt 0) {
+            #         Write-Host "`r [*] Waiting for $($PendingVMs.Count) VMs... (Ctrl+C to cancel)" -NoNewline -ForegroundColor Gray
+            #         Start-Sleep -Seconds 3 # Pausa antes de la siguiente ronda
+            #     }
+            # }
+
+          
+            
+            # Write-Host "`n [!] All IPs collected successfully.`n" -ForegroundColor Cyan
+
+            Write-SectionHeader -Title "CONFIGURING ALL NODES WITH ANSIBLE"
+
+            Invoke-Task "Preparing Ansible Environment" -Task {
+                $AnsibleFile = Join-Path $ProjectRoot "ansible\playbooks\setup_zabbix_agent.yml"
+                $global:LinuxPlaybookPath = wsl wslpath -u "$AnsibleFile"
+            }
+
+            Invoke-Task "Executing Ansible Playbook (Agent Installation)" -Task {
+                 # 1. Extraemos solo las IPs de los nodos completados
+                 # $IPList = $CompletedNodes | ForEach-Object { $_.IP }
+                 $IPList = @("192.168.1.243", "192.168.1.244")
+
+                # 2. Creamos el inventario dinámico (Ej: "192.168.1.10,192.168.1.11,")
+                $Inventory = ($IPList -join ",") + ","
+                
+                # 3. Validaciones de seguridad
+                if ([string]::IsNullOrWhiteSpace($global:LinuxPlaybookPath)) { throw "Error: Ruta del Playbook no definida." }
+                if ([string]::IsNullOrWhiteSpace($Inventory) -or $Inventory -eq ",") { throw "La lista de IPs para los nodos está vacía." }
+              
+                # 4. Definición de argumentos (siguiendo tu formato exitoso)
+                $ansibleArgs = @(
+                    "ansible-playbook",
+                    "-i", "$Inventory",
+                    "-e", "ansible_user=deploy",
+                    "-e", "ansible_ssh_private_key_file=~/.ssh/deploy_key",
+                    "-e", "ansible_ssh_common_args='-o StrictHostKeyChecking=no'",
+                    "-e", "target_hosts=all",
+                    "$global:LinuxPlaybookPath"
+                )
+
+                # 5. Ejecución en WSL
+                & wsl @ansibleArgs
+
+                $exitCode = $LASTEXITCODE
+                if ($exitCode -ne 0) {
+                    throw "Ansible masivo termino con errores (Exit Code: $exitCode)."
                 }
             }
+
+            Write-Host "`n# ---------------------------------------------------------" -ForegroundColor Green
+            Write-Host "# DONE: All nodes created and configured successfully!" -ForegroundColor Green
+            Write-Host "# ---------------------------------------------------------" -ForegroundColor Green
+                
+            # }
+        # }
+        # }
         }
 
         "3" {

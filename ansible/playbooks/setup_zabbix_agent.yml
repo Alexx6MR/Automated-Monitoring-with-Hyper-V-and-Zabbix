@@ -1,7 +1,10 @@
 ---
 - name: Deploy Zabbix Agents
-  hosts: managed_nodes
+  hosts: "{{ target_hosts | default('all') }}"
   become: yes
   roles:
     - base-config
-    - zabbix-agent
+  
+  vars:
+
+  tasks:

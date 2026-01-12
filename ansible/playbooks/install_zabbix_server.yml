@@ -4,5 +4,192 @@
   become: yes
   roles:
     - base-config
-    - zabbix-server
 
+  vars:
+    ansible_user: deploy
+    ansible_ssh_private_key_file: "~/.ssh/deploy_key"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    db_password: "TuPasswordSeguro"
+    timezone: "Europe/Madrid"
+    repo_rpm_url: "https://repo.zabbix.com/zabbix/7.0/alma/9/x86_64/zabbix-release-latest.el9.noarch.rpm"
+
+  tasks:
+    # 1. System Preparation
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Install Zabbix Official Repository
+      ansible.builtin.dnf:
+        name: "{{ repo_rpm_url }}"
+        state: present
+        disable_gpg_check: true
+
+    # 2. Database Engine Installation
+    - name: Install MariaDB Server and MySQL Python dependencies
+      ansible.builtin.dnf:
+        name:
+          - mariadb-server
+          - python3-PyMySQL
+        state: present
+
+    - name: Ensure MariaDB is started and enabled
+      ansible.builtin.systemd:
+        name: mariadb
+        state: started
+        enabled: true
+
+    # 3. Zabbix Database & User Creation
+    - name: Create Zabbix database
+      community.mysql.mysql_db:
+        name: zabbix
+        encoding: utf8mb4
+        collation: utf8mb4_bin
+        login_unix_socket: /var/lib/mysql/mysql.sock
+
+    - name: Create Zabbix database user
+      community.mysql.mysql_user:
+        name: zabbix
+        password: "{{ db_password }}"
+        priv: 'zabbix.*:ALL'
+        login_unix_socket: /var/lib/mysql/mysql.sock
+
+    # 4. Zabbix Core Installation
+    - name: Install Zabbix Server, Web Frontend, and Agent 2
+      ansible.builtin.dnf:
+        name:
+          - zabbix-server-mysql
+          - zabbix-web-mysql
+          - zabbix-apache-conf
+          - zabbix-sql-scripts
+          - zabbix-selinux-policy
+          - zabbix-agent2
+          - firewalld # Aseguramos que firewalld esté para gestionarlo
+        state: present
+
+    - name: Import initial Database schema
+      ansible.builtin.shell: |
+        zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql -uzabbix -p{{ db_password }} zabbix
+      args:
+        creates: /var/lib/mysql/zabbix/hosts.ibd
+
+    # 5. Configuration & Templating
+    - name: Configure Database password in zabbix_server.conf
+      ansible.builtin.lineinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        regexp: '^# DBPassword='
+        line: "DBPassword={{ db_password }}"
+      notify: restart zabbix-services
+
+    - name: Configure Zabbix Frontend (PHP Template)
+      ansible.builtin.template:
+        src: templates/zabbix.conf.php.j2
+        dest: /etc/zabbix/web/zabbix.conf.php
+        owner: apache
+        group: apache
+        mode: '0644'
+
+    - name: Set PHP Timezone in php.ini
+      ansible.builtin.lineinfile:
+        path: /etc/php.ini
+        regexp: '^;date.timezone ='
+        line: "date.timezone = {{ timezone }}"
+      notify: restart zabbix-services
+
+    # 6. Security & Firewall (CRUCIAL)
+    - name: Open Firewall ports
+      ansible.posix.firewalld:
+        service: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop:
+        - http
+        - https
+        - zabbix-server
+
+    - name: Allow Apache to connect to Database (SELinux)
+      ansible.posix.seboolean:
+        name: httpd_can_network_connect_db
+        state: true
+        persistent: true
+
+    - name: Allow Apache to connect to Zabbix Server network (SELinux)
+      ansible.posix.seboolean:
+        name: httpd_can_network_connect
+        state: true
+        persistent: true
+
+    - name: Ensure Zabbix Agent 2 Configuration
+      ansible.builtin.lineinfile:
+        path: /etc/zabbix/zabbix_agent2.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^ServerActive=', line: 'ServerActive=127.0.0.1' }
+        - { regexp: '^Hostname=', line: "Hostname={{ inventory_hostname }}" }
+      notify: restart zabbix-services
+
+    - name: Install pip for Python
+      ansible.builtin.dnf:
+        name: python3-pip
+        state: present
+
+    - name: Install zabbix-api python package
+      ansible.builtin.pip:
+        name: zabbix-api
+
+    # 7. Activation & API
+    - name: Force all notified handlers to run at this point
+      ansible.builtin.meta: flush_handlers
+    
+    - name: Wait for Zabbix Web to be ready
+      ansible.builtin.wait_for:
+        port: 80
+        host: "{{ ansible_host }}"
+        delay: 5
+        timeout: 90 # Aumentado a 90 por si Apache tarda un poco más
+        
+    - name: "Configure Zabbix Autoregistration Action"
+      community.zabbix.zabbix_action:
+        name: "Auto-registration for Hyper-V Nodes"
+        event_source: "auto_registration"
+        state: present
+        status: enabled
+        esc_period: "1h"
+        conditions:
+          - type: "host_name"
+            operator: "contains"
+            value: "Zabbix-Node"
+        operations:
+          - type: "add_host"
+          - type: "add_to_host_group"
+            host_groups:
+              - "Linux servers"
+          - type: "link_to_template"
+            templates:
+              - "Linux by Zabbix agent active"
+      vars:
+        ansible_network_os: community.zabbix.zabbix
+        ansible_connection: httpapi
+        ansible_httpapi_port: 80
+        ansible_httpapi_use_ssl: false
+        ansible_zabbix_url_path: "zabbix"
+        ansible_host: "{{ ansible_host }}"
+        ansible_httpapi_user: "Admin"     
+        ansible_httpapi_pass: "zabbix"
+        ansible_user: "Admin" 
+      delegate_to: localhost
+      run_once: true
+
+  handlers:
+    - name: restart zabbix-services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - zabbix-server
+        - zabbix-agent2
+        - httpd
+        - mariadb # Corregido: antes decía mariadb b

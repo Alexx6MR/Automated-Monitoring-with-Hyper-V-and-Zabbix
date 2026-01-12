@@ -104,6 +104,49 @@
     - { regexp: '^Hostname=', line: "Hostname={{ inventory_hostname }}" }
   notify: restart zabbix-services
 
+- name: Install pip for Python
+  ansible.builtin.dnf:
+    name: python3-pip
+    state: present
+
+- name: Install zabbix-api python package
+  ansible.builtin.pip:
+    name: zabbix-api
+
+- name: "Configure Zabbix Autoregistration Action"
+  community.zabbix.zabbix_action:
+    name: "Auto-registration for Hyper-V Nodes"
+    event_source: "auto_registration"
+    state: present
+    status: enabled
+    esc_period: "1h"              # Requerido por la API para crear la acción
+    conditions:
+      - type: "host_name"
+        operator: "contains"
+        value: "Zabbix-Node"
+    operations:
+      - type: "add_host"
+      - type: "add_to_host_group"
+        host_groups:
+          - "Linux servers"
+      - type: "link_to_template"
+        templates:
+          - "Linux by Zabbix agent active"
+  vars:
+    ansible_network_os: community.zabbix.zabbix
+    ansible_connection: httpapi
+    ansible_httpapi_port: 80
+    ansible_httpapi_use_ssl: false
+    ansible_zabbix_url_path: "zabbix" # Verifica si entras por /zabbix o directo
+    ansible_host: "{{ ansible_host }}"
+    
+    # Usamos los nombres de variables que el plugin httpapi busca específicamente
+    ansible_httpapi_user: "Admin"     
+    ansible_httpapi_pass: "zabbix"
+    
+  delegate_to: localhost
+  run_once: true
+
 # Flush handlers to ensure services are up before finishing the play
 - name: Force all notified handlers to run at this point
   ansible.builtin.meta: flush_handlers

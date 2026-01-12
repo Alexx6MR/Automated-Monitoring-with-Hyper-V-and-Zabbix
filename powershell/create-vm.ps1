@@ -41,9 +41,17 @@ Invoke-Task "Downloading AlmaLinux 10 Image" -SkipCondition  ((Test-Path $QcowPa
     Invoke-WebRequest -Uri $TemplateUrl -OutFile $QcowPath
 }
 
-Invoke-Task "Installing QEMU Utilities in WSL" -Task {
-    wsl sudo apt-get update -y
-    wsl sudo apt-get install qemu-utils -y
+Invoke-Task "Checking and Installing QEMU Utilities in WSL" -Task {
+    # Verificamos si qemu-img (parte de qemu-utils) existe
+    $isInstalled = wsl which qemu-img
+    
+    if (-not $isInstalled) {
+        Write-Host "qemu-utils no encontrado. Instalando..." -ForegroundColor Cyan
+        wsl sudo apt-get update -y
+        wsl sudo apt-get install qemu-utils -y
+    } else {
+        Write-Host "qemu-utils ya está instalado. Saltando paso." -ForegroundColor Green
+    }
 }
 
 Invoke-Task "Converting QCOW2 to VHDX" -SkipCondition (Test-Path $TemplatePath) -Task {
