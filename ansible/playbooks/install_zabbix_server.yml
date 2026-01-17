@@ -2,8 +2,6 @@
 - name: Deploy Zabbix Infrastructure
   hosts: all
   become: yes
-  roles:
-    - base-config
 
   vars:
     ansible_user: deploy
@@ -14,6 +12,9 @@
     repo_rpm_url: "https://repo.zabbix.com/zabbix/7.0/alma/9/x86_64/zabbix-release-latest.el9.noarch.rpm"
 
   tasks:
+    - name: Ensure Base configuration is installed
+      include_tasks: default_config.yml
+      
     # 1. System Preparation
     - name: Wait for cloud-init to finish
       ansible.builtin.command: cloud-init status --wait
@@ -24,6 +25,7 @@
       ansible.builtin.dnf:
         name: "{{ repo_rpm_url }}"
         state: present
+        validate_certs: false
         disable_gpg_check: true
 
     # 2. Database Engine Installation
@@ -65,7 +67,7 @@
           - zabbix-sql-scripts
           - zabbix-selinux-policy
           - zabbix-agent2
-          - firewalld # Aseguramos que firewalld esté para gestionarlo
+          - firewalld
         state: present
 
     - name: Import initial Database schema
@@ -159,9 +161,9 @@
         status: enabled
         esc_period: "1h"
         conditions:
-          - type: "host_name"
+          - type: "host_metadata"
             operator: "contains"
-            value: "Zabbix-Node"
+            value: "zabbix-node_sw"
         operations:
           - type: "add_host"
           - type: "add_to_host_group"
@@ -192,4 +194,4 @@
         - zabbix-server
         - zabbix-agent2
         - httpd
-        - mariadb # Corregido: antes decía mariadb b
+        - mariadb

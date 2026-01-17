@@ -1,0 +1,79 @@
+---
+  # 1. Configuración de Idioma y Teclado (Suecia)
+    - name: Install Swedish language pack
+      ansible.builtin.package:
+        name: glibc-langpack-sv
+        state: present
+
+    - name: Check if sv_SE.UTF-8 locale exists
+      ansible.builtin.command: localectl list-locales
+      register: installed_locales
+      changed_when: false
+
+    - name: Ensure sv_SE.UTF-8 locale is generated
+      ansible.builtin.command: localedef -c -i sv_SE -f UTF-8 sv_SE.UTF-8
+      when: "'sv_SE.UTF-8' not in installed_locales.stdout"
+
+    - name: Set system locale to Swedish
+      ansible.builtin.command: localectl set-locale LANG=sv_SE.UTF-8
+      # Solo cambia si no es ya el actual
+      when: "ansible_env.LANG | default('') != 'sv_SE.UTF-8'"
+
+    - name: Set keyboard layout to SE (Sweden)
+      ansible.builtin.command: localectl set-x11-keymap se
+
+    # 2. Actualización y Herramientas Básicas
+    - name: Install base administration tools
+      ansible.builtin.package:
+        name:
+          - vim
+          - wget
+          - curl
+          - net-tools
+          - git
+          - firewalld
+          - python3-firewall
+        state: present
+
+    # 3. Seguridad: Firewall
+    - name: Ensure firewalld is running
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Allow services in firewall
+      ansible.posix.firewalld:
+        service: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop:
+        - ssh
+        - http
+        - https
+        - mysql
+
+    # 4. Configuración de /etc/hosts
+    - name: Ensure localhost is mapped correctly
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.0\.1'
+        line: "127.0.0.1 localhost localhost.localdomain"
+        state: present
+
+    - name: Configure persistent DHCP identity
+      community.general.nmcli:
+        conn_name: "eth0"
+        ifname: "eth0"
+        type: ethernet
+        # Usamos el nombre del host para que el DHCP siempre lo reconozca
+        dhcp_client_id: "{{ ansible_hostname }}"
+        state: present
+      register: dhcp_persist
+
+    - name: Apply network identity without losing connection
+      ansible.builtin.shell: "nohup sh -c 'sleep 2 && nmcli connection up eth0' &"
+      async: 10
+      poll: 0
+      when: dhcp_persist.changed
