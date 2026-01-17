@@ -43,17 +43,17 @@
           - python3-firewall
         state: present
 
-    - name: Configure Zabbix Agent 2 (Unified)
+    - name: Configure Zabbix Agent 2 (Fix Identity)
       ansible.builtin.lineinfile:
         path: /etc/zabbix/zabbix_agent2.conf
         regexp: "{{ item.regexp }}"
         line: "{{ item.line }}"
       loop:
-        - { regexp: '^Server=', line: "Server={{ zabbix_server_ip }}" }
         - { regexp: '^ServerActive=', line: "ServerActive={{ zabbix_server_ip }}" }
-        - { regexp: '^Hostname=', line: "Hostname={{ inventory_hostname }}" }
-        # Aquí construimos tu "objeto" identificador
-        - { regexp: '^#? ?HostMetadata=', line: "HostMetadata=name:{{ inventory_hostname }},type:zabbix_node_sw,env:lab" }
+        - { regexp: '^Hostname=', line: "Hostname={{ VMName | default(ansible_hostname) | default(ansible_host) }}" }
+        - { regexp: '^HostMetadata=', line: "HostMetadata=zabbix_node_sw" }
+        # FORZAR MODO ACTIVO
+        - { regexp: '^#? ?RefreshActiveChecks=', line: "RefreshActiveChecks=60" }
       notify: restart zabbix-agent
 
     - name: Ensure firewalld is running

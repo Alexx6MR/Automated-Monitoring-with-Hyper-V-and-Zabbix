@@ -97,7 +97,7 @@ do {
                 }
 
                 Invoke-Task "Saving VM data in the database" -Task {
-                    $content = "- name: zabbix-server`n  ip: $global:serverIP"
+                    $content = "zabbix_server_ip: `"$global:serverIP`""
                     $content | Out-File -FilePath "./fake_db.yml" -Encoding UTF8
                 }
 
@@ -115,7 +115,7 @@ do {
 
                     # debug mode
                     if (-not $global:serverIP ) {
-                        $global:serverIP = "192.168.1.72"
+                        $global:serverIP = "192.168.1.77"
                     }
 
                     if ([string]::IsNullOrWhiteSpace($global:serverIP)) { throw "La IP del servidor es nula o vacía." }
@@ -149,61 +149,61 @@ do {
         }
         "2" {
             # 1. PLANIFICACIÓN (Recoger nombres)
-        #     $RawInput = Read-Host "`n -> How many VMs do you want to create?"
-        #     if ($RawInput -as [int]) {
-        #         $Count = [int]$RawInput
-        #         $PendingVMs = @() # Lista de nombres que aún no tienen IP
+            $RawInput = Read-Host "`n -> How many VMs do you want to create?"
+            if ($RawInput -as [int]) {
+                $Count = [int]$RawInput
+                $PendingVMs = @() # Lista de nombres que aún no tienen IP
 
-        #     for ($i = 1; $i -le $Count; $i++) {
-        #         $Name = Read-Host " -> Name for VM #$i"
-        #         if ([string]::IsNullOrWhiteSpace($Name)) { $Name = "Zabbix-Node-$i" }
-        #         $PendingVMs += $Name
-        #     }
+            for ($i = 1; $i -le $Count; $i++) {
+                $Name = Read-Host " -> Name for VM #$i"
+                if ([string]::IsNullOrWhiteSpace($Name)) { $Name = "Zabbix-Node-$i" }
+                $PendingVMs += $Name
+            }
 
-        #    # 2. CREACIÓN MASIVA
-        #     Write-SectionHeader -Title "PHASE 1: PROVISIONING $Count VMs"
-        #     foreach ($Name in $PendingVMs) {
+           # 2. CREACIÓN MASIVA
+            Write-SectionHeader -Title "PHASE 1: PROVISIONING $Count VMs"
+            foreach ($Name in $PendingVMs) {
                 
-        #         Invoke-Task "Creating $Name" -SkipCondition ([bool](Get-VM -Name $Name -ErrorAction SilentlyContinue)) -Task {
-        #             & $CreateVmScript -VMName $Name `
-        #                 -TemplatesDir $TemplatesDir -TemplatePath $TemplatePath -TemplateUrl $TemplateUrl `
-        #                 -VMsDir $VMsDir -CloudInitPath $CloudInitPath -PrivKey $PrivKey `
-        #                 -UserDataTemplateScript $UserDataTemplateScript -MetaDataTemplateScript $MetaDataTemplateScript
+                Invoke-Task "Creating $Name" -SkipCondition ([bool](Get-VM -Name $Name -ErrorAction SilentlyContinue)) -Task {
+                    & $CreateVmScript -VMName $Name `
+                        -TemplatesDir $TemplatesDir -TemplatePath $TemplatePath -TemplateUrl $TemplateUrl `
+                        -VMsDir $VMsDir -CloudInitPath $CloudInitPath -PrivKey $PrivKey `
+                        -UserDataTemplateScript $UserDataTemplateScript -MetaDataTemplateScript $MetaDataTemplateScript
 
-        #                 if ($LASTEXITCODE -ne 0) { throw "El aprovisionamiento de la VM falló. Abortando despliegue." }
-        #         }
+                        if ($LASTEXITCODE -ne 0) { throw "El aprovisionamiento de la VM falló. Abortando despliegue." }
+                }
                 
-        #     }
+            }
 
-        #     # 3. BUCLE DE BÚSQUEDA INTELIGENTE (Polling Loop)
-        #     Write-SectionHeader -Title "PHASE 2: ASYNCHRONOUS IP DISCOVERY"
-        #     $CompletedNodes = @() # Lista de objetos {name, ip}
+            # 3. BUCLE DE BÚSQUEDA INTELIGENTE (Polling Loop)
+            Write-SectionHeader -Title "PHASE 2: ASYNCHRONOUS IP DISCOVERY"
+            $CompletedNodes = @() # Lista de objetos {name, ip}
 
-        #     while ($PendingVMs.Count -gt 0) {
-        #         $StillPending = @() # Temporal para las que siguen sin IP en esta ronda
+            while ($PendingVMs.Count -gt 0) {
+                $StillPending = @() # Temporal para las que siguen sin IP en esta ronda
             
-        #         foreach ($VMName in $PendingVMs) {
-        #             # Intentamos obtener la IP de forma rápida (sin timeout largo)
-        #             $VM = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-        #             $IP = $VM.NetworkAdapters.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
+                foreach ($VMName in $PendingVMs) {
+                    # Intentamos obtener la IP de forma rápida (sin timeout largo)
+                    $VM = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+                    $IP = $VM.NetworkAdapters.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
 
-        #             if ($null -ne $IP) {
-        #                 Write-Host " [V] IP Found for $VMName : $IP" -ForegroundColor Green
-        #                 # Guardamos el objeto y lo sacamos de la lista de pendientes
-        #                 $CompletedNodes += [PSCustomObject]@{ Name = $VMName; IP = $IP }
-        #                 Show-NodeBox -VMName $VMName -IP $IP
-        #             } else {
-        #                 $StillPending += $VMName
-        #             }
-        #         }
+                    if ($null -ne $IP) {
+                        Write-Host " [V] IP Found for $VMName : $IP" -ForegroundColor Green
+                        # Guardamos el objeto y lo sacamos de la lista de pendientes
+                        $CompletedNodes += [PSCustomObject]@{ Name = $VMName; IP = $IP }
+                        Show-NodeBox -VMName $VMName -IP $IP
+                    } else {
+                        $StillPending += $VMName
+                    }
+                }
 
-        #         $PendingVMs = $StillPending
+                $PendingVMs = $StillPending
             
-        #         if ($PendingVMs.Count -gt 0) {
-        #             Write-Host "`r [*] Waiting for $($PendingVMs.Count) VMs... (Ctrl+C to cancel)" -NoNewline -ForegroundColor Gray
-        #             Start-Sleep -Seconds 3 # Pausa antes de la siguiente ronda
-        #         }
-        #     }
+                if ($PendingVMs.Count -gt 0) {
+                    Write-Host "`r [*] Waiting for $($PendingVMs.Count) VMs... (Ctrl+C to cancel)" -NoNewline -ForegroundColor Gray
+                    Start-Sleep -Seconds 3 # Pausa antes de la siguiente ronda
+                }
+            }
 
           
             
@@ -235,12 +235,11 @@ do {
                 $ansibleArgs = @(
                     "ansible-playbook",
                     "-i", "$Inventory",
-                    "-e", "ansible_user=deploy",
-                    "-e", "ansible_ssh_private_key_file=~/.ssh/deploy_key",
-                    "-e", "ansible_ssh_common_args='-o StrictHostKeyChecking=no'",
-                    "-e", "target_hosts=all",
+                    "-e", "VMName=$VMName"
                     "$global:LinuxPlaybookPath"
                 )
+
+         
 
                 # 5. Ejecución en WSL
                 & wsl @ansibleArgs
@@ -254,7 +253,7 @@ do {
             Write-Host "`n# ---------------------------------------------------------" -ForegroundColor Green
             Write-Host "# DONE: All nodes created and configured successfully!" -ForegroundColor Green
             Write-Host "# ---------------------------------------------------------" -ForegroundColor Green
-        # }
+            }
         }
 
         "3" {

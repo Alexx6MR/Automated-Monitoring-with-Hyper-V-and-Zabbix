@@ -163,7 +163,7 @@
         conditions:
           - type: "host_metadata"
             operator: "contains"
-            value: "zabbix-node_sw"
+            value: "zabbix_node_sw"
         operations:
           - type: "add_host"
           - type: "add_to_host_group"
