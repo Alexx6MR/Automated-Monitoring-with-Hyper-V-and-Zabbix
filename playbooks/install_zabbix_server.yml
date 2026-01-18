@@ -1,5 +1,5 @@
 ---
-- name: Deploy Zabbix Infrastructure
+- name: Install Zabbix Server
   hosts: all
   become: yes
 
@@ -171,7 +171,8 @@
               - "Linux servers"
           - type: "link_to_template"
             templates:
-              - "Linux by Zabbix agent active"
+              - "Linux by Zabbix agent"
+              # - "Linux by Zabbix agent active"
       vars:
         ansible_network_os: community.zabbix.zabbix
         ansible_connection: httpapi

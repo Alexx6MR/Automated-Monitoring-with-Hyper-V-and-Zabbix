@@ -34,6 +34,6 @@ $WslDistroName      = "Ubuntu"
 $AnsiblePlaybook    = "install_zabbix_server.yml"
 $AnsibleInventory   = "./hosts"
 $env:ANSIBLE_CONFIG_WRITABLE = "ignore"
-$AnsiblePath = Join-Path $ProjectRoot "ansible/playbooks/install_zabbix_server.yml"
+$AnsiblePath = Join-Path $ProjectRoot "playbooks/install_zabbix_server.yml"
 # ---------------------------------------------------------
 Write-Host " [V] Configuration loaded. VMs will be installed in: $VMsDir" -ForegroundColor Cyan

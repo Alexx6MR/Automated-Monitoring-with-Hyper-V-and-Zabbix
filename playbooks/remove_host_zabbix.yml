@@ -1,0 +1,83 @@
+---
+- name: Remove Host from Zabbix Server
+  hosts: "{{ target_hosts | default('all') }}"
+  connection: local
+  vars_files:
+    - "../fake_db.yml"
+
+  vars:
+    # Mantenemos tus variables de conexión para el inventario
+    ansible_user: deploy
+    ansible_ssh_private_key_file: "~/.ssh/deploy_key"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    zabbix_api_url: "http://{{ zabbix_server_ip }}/zabbix/api_jsonrpc.php"
+
+  tasks:
+    - name: "Obteniendo el ID del host {{ VMName }}"
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "host.get"
+          params:
+            filter:
+              host: ["{{ VMName }}"]
+          auth: null # En Zabbix 6.4/7.0 user.login se puede omitir si pasas credenciales
+          id: 1
+        # Para simplificar, primero nos logueamos para obtener un token
+      register: host_lookup
+
+    # Como el primer paso requiere login, vamos a hacerlo en un solo bloque 
+    # más simple usando las credenciales directas si tu Zabbix lo permite, 
+    # o mejor aún, usando el login previo:
+
+    - name: "Login en Zabbix para obtener Token"
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "user.login"
+          params:
+            username: "Admin"
+            password: "zabbix"
+          id: 1
+      register: login_result
+
+    - name: "Buscando ID de {{ VMName }}"
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "host.get"
+          params:
+            filter:
+              host: ["{{ VMName }}"]
+          auth: "{{ login_result.json.result }}"
+          id: 2
+      register: host_search
+
+    - name: "Eliminando host de Zabbix"
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "host.delete"
+          params:
+            - "{{ host_search.json.result[0].hostid }}"
+          auth: "{{ login_result.json.result }}"
+          id: 3
+      when: host_search.json.result | length > 0
+      register: delete_final
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "Host {{ VMName }} eliminado correctamente de la base de datos."
+      when: delete_final is changed

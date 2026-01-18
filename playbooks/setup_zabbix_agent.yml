@@ -1,10 +1,11 @@
 ---
 - name: Deploy Zabbix Agents
   hosts: "{{ target_hosts | default('all') }}"
+  serial: 1
   become: yes
 
   vars_files:
-    - "../../fake_db.yml"  # <--- PRIORIDAD ALTA: Ansible buscará zabbix_server_ip aquí
+    - "../fake_db.yml"  # <--- PRIORIDAD ALTA: Ansible buscará zabbix_server_ip aquí
 
   vars:
     ansible_user: deploy
@@ -49,10 +50,10 @@
         regexp: "{{ item.regexp }}"
         line: "{{ item.line }}"
       loop:
+        - { regexp: '^Server=', line: "Server={{ zabbix_server_ip }}" }
         - { regexp: '^ServerActive=', line: "ServerActive={{ zabbix_server_ip }}" }
-        - { regexp: '^Hostname=', line: "Hostname={{ VMName | default(ansible_hostname) | default(ansible_host) }}" }
-        - { regexp: '^HostMetadata=', line: "HostMetadata=zabbix_node_sw" }
-        # FORZAR MODO ACTIVO
+        - { regexp: '^Hostname=', line: "Hostname={{ ansible_facts['hostname'] }}" }
+        - { regexp: '^#? ?HostMetadata=', line: "HostMetadata=type:zabbix_node_sw,env:lab,os:linux" }
         - { regexp: '^#? ?RefreshActiveChecks=', line: "RefreshActiveChecks=60" }
       notify: restart zabbix-agent
 
@@ -77,3 +78,24 @@
 
     - name: Flush handlers
       ansible.builtin.meta: flush_handlers
+
+    - name: Install Zabbix Sender
+      ansible.builtin.dnf:
+        name: zabbix-sender
+        state: present
+    
+    - name: Force immediate Active Check registration
+      ansible.builtin.shell: >
+        zabbix_sender -z {{ zabbix_server_ip }} 
+        -s "{{ inventory_hostname }}" 
+        -k "agent.ping" 
+        -o 1
+      register: sender_result
+      # Usamos ignore_errors o failed_when porque a veces el primer saludo 
+      # falla si el servidor aún no ha procesado el autoregistro.
+      failed_when: false
+
+    - name: Restart Zabbix Agent 2 to refresh active checks
+      ansible.builtin.systemd:
+        name: zabbix-agent2
+        state: restarted
