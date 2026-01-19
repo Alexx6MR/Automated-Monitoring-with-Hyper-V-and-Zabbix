@@ -29,10 +29,6 @@
         # Para simplificar, primero nos logueamos para obtener un token
       register: host_lookup
 
-    # Como el primer paso requiere login, vamos a hacerlo en un solo bloque 
-    # más simple usando las credenciales directas si tu Zabbix lo permite, 
-    # o mejor aún, usando el login previo:
-
     - name: "Login en Zabbix para obtener Token"
       ansible.builtin.uri:
         url: "{{ zabbix_api_url }}"

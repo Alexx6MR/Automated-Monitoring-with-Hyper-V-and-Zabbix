@@ -1,16 +1,22 @@
-# ---------------------------------------------------------
-# 1. Load Configurations and Utilities
-# ---------------------------------------------------------
-$ProjectRoot = Get-Location
-
-# IMPORTANTE: Dot Sourcing (. espacio ruta)
-# Esto "copia y pega" las funciones en la memoria del script actual
-. "$PSScriptRoot\powershell\utils\common.ps1"
-. "$PSScriptRoot\powershell\utils\config.ps1"
+. ".\powershell\utils\common.ps1"
 
 $ErrorActionPreference = "Stop"
-$CreateVmScript = Join-Path $PowershellDir "create-vm.ps1"
 $ProgressPreference = 'SilentlyContinue'
+
+# ---------------------------------------------------------
+# Variables
+# ---------------------------------------------------------
+$ProjectRoot = Get-Location
+$TemplatesDir = Join-Path $ProjectRoot "templates"
+$TemplateUrl      = "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2"
+$TemplatePath     = Join-Path $TemplatesDir "almalinux-10-base.vhdx"
+$CloudInitPath    = Join-Path $ProjectRoot "cloud-init"
+$PowershellDir    = Join-Path $ProjectRoot "powershell"
+$CreateVmScript = Join-Path $PowershellDir "create-vm.ps1"
+$PrivKey           = "./powershell/secrets/deploy_key"
+$UserDataTemplateScript = Join-Path $CloudInitPath "user-data.ps1"
+$MetaDataTemplateScript = Join-Path $CloudInitPath "meta-data.ps1"
+$VMsDir           = Join-Path $ProjectRoot "vms"
 
 # --- BANNER ---
 Clear-Host
@@ -24,9 +30,21 @@ Invoke-Task "Checking Zabbix-Server Status" -SkipCondition ([bool](Get-VM -Name 
     $global:ZabbixVM = Get-VM -Name "zabbix-server" -ErrorAction SilentlyContinue
 }
 
+Invoke-Task "Ensuring fake_db existence" -Task {
+    $dbPath = Join-Path $PSScriptRoot "fake_db.yml"
+    
+    if (-not (Test-Path $dbPath)) {
+        Write-Host " [i] File not found. Creating new fake_db.yml..." -ForegroundColor Gray
+        $content = "zabbix_server_ip: `"`"" 
+        $content | Out-File -FilePath $dbPath -Encoding UTF8 -Force
+    } else {
+        Write-Host " [i] fake_db.yml already exists. Skipping creation." -ForegroundColor Green
+    }
+}
+
 if ($global:ZabbixVM) {
     Write-Host " [+] zabbix-server found in the system." -ForegroundColor Green
-    # Intentamos obtener su IP sin el event listener largo, solo una consulta rápida
+    # We try to get its IP without the long event listener, just a quick query
     $ZabbixIP = $global:ZabbixVM.NetworkAdapters.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
     if ($ZabbixIP) {
         Write-Host " [>] Management IP: $ZabbixIP" -ForegroundColor Cyan
@@ -57,43 +75,47 @@ do {
             $existingVM = Get-VM -Name "zabbix-server" -ErrorAction SilentlyContinue
 
             if ($existingVM) {
-                # --- ESCENARIO A: LA VM YA EXISTE ---
+                # --- SCENARIO A: VM ALREADY EXISTS ---
                 Write-Host " [+] zabbix-server already exists. Fetching connection details..." -ForegroundColor Cyan
         
-                # Intentamos obtener la IP actual de la VM
+                # Attempt to get the current IP of the VM
                 $ZabbixIP = $existingVM.NetworkAdapters.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
         
                 if ($ZabbixIP) {
                     $global:serverIP = $ZabbixIP
                 } else {
-                    # Si no tiene IP (está apagada o cargando), ejecutamos la tarea de espera
+                    # If it has no IP (off or loading), we run the wait task
                     Invoke-Task "Waiting for Network/IP Assignment" -Task {
                         $res = Get-VMIPAddress -VMName "zabbix-server"
-                        if ($res.Status -eq "Success") { $global:serverIP = $res.IP } else { throw "No se pudo obtener la IP." }
+                        if ($res.Status -eq "Success") { $global:serverIP = $res.IP } else { throw "Could not retrieve IP address." }
                     }
                 }   
                 if ($null -ne $global:serverIP) {
-                  &  Show-ZabbixServerBox -IP $global:serverIP
+                    Invoke-Task "Updating VM data in the database" -Task {
+                        $content = "zabbix_server_ip: `"$global:serverIP`""
+                        $content | Out-File -FilePath "./fake_db.yml" -Encoding UTF8
+                    }
+                    Show-ZabbixServerBox -IP $global:serverIP
                 } else {
-                    Write-Host " [X] Error: No se pudo determinar la IP del servidor Zabbix." -ForegroundColor Red
+                    Write-Host " [X] Error: Could not determine Zabbix server IP." -ForegroundColor Red
                 }
                 
-            }else{
+            } else {
 
-                #Paso 1: Ejecutar el script de creación atómica
+                # Step 1: Run the atomic creation script
                 Invoke-Task "Provisioning Virtual Machine" -SkipCondition ([bool](Get-VM -Name "zabbix-server" -ErrorAction SilentlyContinue)) -Task {
-                    & $CreateVmScript -VMName "zabbix-server" `
+                    & $CreateVmScript -VMName "zabbix-server" -Size "large" `
                         -TemplatesDir $TemplatesDir -TemplatePath $TemplatePath -TemplateUrl $TemplateUrl `
                         -VMsDir $VMsDir -CloudInitPath $CloudInitPath -PrivKey $PrivKey `
                         -UserDataTemplateScript $UserDataTemplateScript -MetaDataTemplateScript $MetaDataTemplateScript
 
-                        if ($LASTEXITCODE -ne 0) { throw "El aprovisionamiento de la VM falló. Abortando despliegue." }
+                        if ($LASTEXITCODE -ne 0) { throw "VM provisioning failed. Aborting deployment." }
                 }
 
-                #Paso 2: Obtener IP (con reintentos internos)
+                # Step 2: Obtain IP (with internal retries)
                 Invoke-Task "Waiting for Network/IP Assignment" -Task {
                     $res = Get-VMIPAddress -VMName "zabbix-server"
-                    if ($res.Status -eq "Success") { $global:serverIP = $res.IP } else { throw "No se pudo obtener la IP." }
+                    if ($res.Status -eq "Success") { $global:serverIP = $res.IP } else { throw "Could not retrieve IP address." }
                 }
 
                 Invoke-Task "Saving VM data in the database" -Task {
@@ -103,24 +125,22 @@ do {
 
                 Write-SectionHeader -Title "ANSIBLE CONFIGURATIONS"
 
-                # Paso 3: Configurar Ansible
+                # Step 3: Configure Ansible
                 Invoke-Task "Preparing Ansible Environment" -Task {
                     $AnsibleFile = Join-Path $ProjectRoot "playbooks\install_zabbix_server.yml"
                     $global:LinuxPlaybookPath = wsl wslpath -u "$AnsibleFile"
                 }
 
-                # Paso 4: Ejecución de Ansible
+                # Step 4: Execute Ansible
                 Invoke-Task "Executing Ansible Playbook (Zabbix Installation)" -Task {
 
                     # debug mode
                     if (-not $global:serverIP ) {
-                        $global:serverIP = "192.168.1.77"
+                        $global:serverIP = "192.168.1.113"
                     }
 
-                    if ([string]::IsNullOrWhiteSpace($global:serverIP)) { throw "La IP del servidor es nula o vacía." }
-                    if ([string]::IsNullOrWhiteSpace($global:LinuxPlaybookPath)) { throw "Error: Ruta del Playbook no definida." }
-                    # Usamos la IP detectada dinámicamente
-
+                    if ([string]::IsNullOrWhiteSpace($global:serverIP)) { throw "Server IP is null or empty." }
+                    if ([string]::IsNullOrWhiteSpace($global:LinuxPlaybookPath)) { throw "Error: Playbook path not defined." }
                     
                     $Inventory = "$($global:serverIP),"
 
@@ -136,73 +156,96 @@ do {
                     $exitCode = $LASTEXITCODE
 
                     if ($exitCode -ne 0) {
-                        throw "Ansible terminó con errores (Exit Code: $exitCode)."
+                        throw "Ansible finished with errors (Exit Code: $exitCode)."
                     }
                 }
 
-                # Paso final: Mostrar credenciales en una caja
+                # Final step: Show credentials in a box
                 [Console]::ResetColor()
                 Show-ZabbixServerBox -IP $global:serverIP
                 
             }
         }
         "2" {
-            # 1. PLANIFICACIÓN (Recoger nombres)
+            # 1. PLANNING (Collect names and individual sizes)
             $RawInput = Read-Host "`n -> How many VMs do you want to create?"
             if ($RawInput -as [int]) {
                 $Count = [int]$RawInput
-                $PendingVMs = @() # Lista de nombres que aún no tienen IP
+                $PendingVMs = @() # We will store objects containing { Name, Size }
 
                 for ($i = 1; $i -le $Count; $i++) {
+                    Write-Host "`n--- Configuring VM #$i ---" -ForegroundColor Yellow
+                    
+                    # Get the Name
                     $Name = Read-Host " -> Name for VM #$i"
                     if ([string]::IsNullOrWhiteSpace($Name)) { $Name = "Zabbix-Node-$i" }
-                    $PendingVMs += $Name
+
+                    # Get the Size for THIS specific VM
+                    Write-Host " SELECT HARDWARE SIZE for $Name :" -ForegroundColor White
+                    Write-Host " 1. Small  (1 vCPU, 1GB RAM)"
+                    Write-Host " 2. Medium (2 vCPU, 2GB RAM)"
+                    Write-Host " 3. Large  (4 vCPU, 4GB RAM)"
+                    
+                    $SizeChoice = Read-Host " -> Choice [1-3] (Default: 1)"
+                    
+                    $SelectedSize = switch ($SizeChoice) {
+                        "2"     { "medium" }
+                        "3"     { "large" }
+                        Default { "small" }
+                    }
+
+                    # Add an object with both properties to our list
+                    $PendingVMs += [PSCustomObject]@{
+                        Name = $Name
+                        Size = $SelectedSize
+                    }
                 }
 
-                # 2. CREACIÓN MASIVA
+                # 2. BULK CREATION
                 Write-SectionHeader -Title "PHASE 1: PROVISIONING $Count VMs"
-                foreach ($Name in $PendingVMs) {
+                foreach ($VM in $PendingVMs) {
                 
-                    Invoke-Task "Creating $Name" -SkipCondition ([bool](Get-VM -Name $Name -ErrorAction SilentlyContinue)) -Task {
-                        & $CreateVmScript -VMName $Name `
+                    Invoke-Task "Creating $($VM.Name) ($($VM.Size))" -SkipCondition ([bool](Get-VM -Name $VM.Name -ErrorAction SilentlyContinue)) -Task {
+                        # We pass $VM.Size specifically for this VM
+                        & $CreateVmScript -VMName $VM.Name -Size $VM.Size `
                             -TemplatesDir $TemplatesDir -TemplatePath $TemplatePath -TemplateUrl $TemplateUrl `
                             -VMsDir $VMsDir -CloudInitPath $CloudInitPath -PrivKey $PrivKey `
                             -UserDataTemplateScript $UserDataTemplateScript -MetaDataTemplateScript $MetaDataTemplateScript
 
-                            if ($LASTEXITCODE -ne 0) { throw "El aprovisionamiento de la VM falló. Abortando despliegue." }
+                        if ($LASTEXITCODE -ne 0) { throw "VM provisioning failed for $($VM.Name)." }
                     }
-                
                 }
 
-                # 3. BUCLE DE BÚSQUEDA INTELIGENTE (Polling Loop)
+                # 3. SMART POLLING LOOP
                 Write-SectionHeader -Title "PHASE 2: ASYNCHRONOUS IP DISCOVERY"
-                $CompletedNodes = @() # Lista de objetos {name, ip}
+                $CompletedNodes = @() 
+                $DiscoveryList = $PendingVMs.Name # List of names to look for
 
-                while ($PendingVMs.Count -gt 0) {
-                    $StillPending = @() # Temporal para las que siguen sin IP en esta ronda
+                while ($DiscoveryList.Count -gt 0) {
+                    $StillPending = @() 
             
-                    foreach ($VMName in $PendingVMs) {
-                        # Intentamos obtener la IP de forma rápida (sin timeout largo)
-                        $VM = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-                        $IP = $VM.NetworkAdapters.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
+                    foreach ($VMName in $DiscoveryList) {
+                        $VMObj = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+                        $global:IP = $VMObj.NetworkAdapters.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
 
-                        if ($null -ne $IP) {
-                            Write-Host " [V] IP Found for $VMName : $IP" -ForegroundColor Green
-                            # Guardamos el objeto y lo sacamos de la lista de pendientes
-                            $CompletedNodes += [PSCustomObject]@{ Name = $VMName; IP = $IP }
-                            Show-NodeBox -VMName $VMName -IP $IP
+                        Invoke-Task "Waiting for Network/IP Assignment" -Task {
+                            $res = Get-VMIPAddress -VMName "zabbix-server"
+                            if ($res.Status -eq "Success") { $global:IP = $res.IP } else { throw "Could not retrieve IP address." }
+                        }
+
+                        if ($null -ne $global:IP) {
+                            Write-Host " [V] IP Found for $VMName : $global:IP" -ForegroundColor Green
+                            $CompletedNodes += [PSCustomObject]@{ Name = $VMName; IP = $global:IP }
+                            Show-NodeBox -VMName $VMName -IP $global:IP
                         } else {
                             $StillPending += $VMName
                         }
                     }
 
-                    $PendingVMs = $StillPending
+                    $DiscoveryList = $StillPending
             
-                    if ($PendingVMs.Count -gt 0) {
-                        Invoke-Task "Waiting for Network/IP Assignment" -Task {
-                            $res = Get-VMIPAddress -VMName $VMName
-                            if ($res.Status -eq "Success") { $global:serverIP = $res.IP } else { throw "No se pudo obtener la IP." }
-                        }
+                    if ($DiscoveryList.Count -gt 0) {
+                        Start-Sleep -Seconds 2 # Small pause to avoid CPU spiking
                     }
                 }
 
@@ -216,21 +259,20 @@ do {
                 }
 
                 Invoke-Task "Executing Ansible Playbook (Agent Installation)" -Task {
-                    # 1. Extraemos solo las IPs de los nodos completados
+                    # 1. Extract only the IPs from completed nodes
                     $IPList = $CompletedNodes | ForEach-Object { $_.IP }
                     if (-not $IPList) {
                         $IPList = @("192.168.1.102")
                     }
         
-
-                    # 2. Creamos el inventario dinámico (Ej: "192.168.1.10,192.168.1.11,")
+                    # 2. Create dynamic inventory (Ex: "192.168.1.10,192.168.1.11,")
                     $Inventory = ($IPList -join ",") + ","
                 
-                    # 3. Validaciones de seguridad
-                    if ([string]::IsNullOrWhiteSpace($global:LinuxPlaybookPath)) { throw "Error: Ruta del Playbook no definida." }
-                    if ([string]::IsNullOrWhiteSpace($Inventory) -or $Inventory -eq ",") { throw "La lista de IPs para los nodos está vacía." }
+                    # 3. Security validations
+                    if ([string]::IsNullOrWhiteSpace($global:LinuxPlaybookPath)) { throw "Error: Playbook path not defined." }
+                    if ([string]::IsNullOrWhiteSpace($Inventory) -or $Inventory -eq ",") { throw "Node IP list is empty." }
               
-                    # 4. Definición de argumentos (siguiendo tu formato exitoso)
+                    # 4. Argument definition
                     $ansibleArgs = @(
                         "ansible-playbook",
                         "-i", "$Inventory",
@@ -238,12 +280,12 @@ do {
                         "$global:LinuxPlaybookPath"
                     )
 
-                    # 5. Ejecución en WSL
+                    # 5. Execute in WSL
                     & wsl @ansibleArgs
 
                     $exitCode = $LASTEXITCODE
                     if ($exitCode -ne 0) {
-                        throw "Ansible masivo termino con errores (Exit Code: $exitCode)."
+                        throw "Bulk Ansible execution finished with errors (Exit Code: $exitCode)."
                     }
                 }
 
@@ -257,7 +299,7 @@ do {
             Write-SectionHeader -Title "CLEANUP INFRASTRUCTURE"
           
             $RemoveVmScript = Join-Path $PowershellDir "remove-vm.ps1"
-            & $RemoveVmScript
+            & $RemoveVmScript -VMsDir $VMsDir -ProjectRoot $ProjectRoot
             
         }
 

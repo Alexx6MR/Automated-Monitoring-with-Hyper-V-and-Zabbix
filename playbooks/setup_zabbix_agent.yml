@@ -25,10 +25,17 @@
     - name: Ensure Base configuration is installed
       ansible.builtin.include_tasks: default_config.yml
 
-    # 2. Confirmación visual de la IP cargada desde el archivo
+    - name: Validate Zabbix Server IP presence
+      ansible.builtin.assert:
+        that:
+          - zabbix_server_ip is defined
+          - zabbix_server_ip | length > 0
+        fail_msg: "CRITICAL ERROR: 'zabbix_server_ip' is missing. Check your fake_db.yml file."
+        success_msg: "Zabbix Server IP validated: {{ zabbix_server_ip }}"
+
     - name: Debug IP from Fake DB
       ansible.builtin.debug:
-        msg: "La IP del servidor (desde fake_db.yml) es: {{ zabbix_server_ip }}"
+        msg: "The server IP is: {{ zabbix_server_ip }}"
 
     - name: Install Zabbix Official Repository
       ansible.builtin.dnf:

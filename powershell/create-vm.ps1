@@ -16,7 +16,8 @@ Param(
     [Parameter(Mandatory=$true)] [String]$CloudInitPath,
     [Parameter(Mandatory=$true)] [String]$PrivKey,
     [Parameter(Mandatory=$true)] [String]$UserDataTemplateScript,
-    [Parameter(Mandatory=$true)] [String]$MetaDataTemplateScript
+    [Parameter(Mandatory=$true)] [String]$MetaDataTemplateScript,
+    [Parameter(Mandatory=$false)] [ValidateSet("small", "medium", "large")] [String]$Size
 )
 
 . "$PSScriptRoot\utils\common.ps1"
@@ -65,24 +66,23 @@ Invoke-Task "Cleaning Temporary QCOW2 File" -SkipCondition (-not (Test-Path $Qco
 }
 
 # ---------------------------------------------------------
-# SECTION 2: Cloud-Init & Security
+# SECTION 2: SSH Implementation
 # ---------------------------------------------------------
-Write-SectionHeader "2. Cloud-Init & Security"
+Write-SectionHeader "SSH Implementation"
 
-# 1. Aseguramos la existencia de la pareja de llaves en Windows
-Invoke-Task "Verifying SSH Key Pair" `
-    -SkipCondition ([bool]((Test-Path $PrivKey) -and (Test-Path "$PrivKey.pub"))) `
-    -Task {
-        ssh-keygen -t ed25519 -N '""' -f "$PrivKey" -q
-    }
+# Aseguramos la existencia de la pareja de llaves en Windows
+Invoke-Task "Verifying SSH Key Pair" -SkipCondition ([bool]((Test-Path $PrivKey) -and (Test-Path "$PrivKey.pub"))) -Task {
+    ssh-keygen -t ed25519 -N '""' -f "$PrivKey" -q
+}
 
-# 2. Identificar rutas de WSL (Paso preparatorio silencioso)
+# Identificar rutas de WSL (Paso preparatorio silencioso)
 $wslUser    = wsl whoami
 $homeDir    = if ($wslUser -eq "root") { "/root" } else { "/home/$wslUser" }
 $wslKeyPath = "$homeDir/.ssh/deploy_key"
 $winKeyPathLinuxFormat = wsl wslpath -u "$PrivKey"
 
-# 3. Comparar llaves (Determinar si hace falta sincronizar)
+
+# Comparar llaves (Determinar si hace falta sincronizar)
 $needsSync = $true
 Invoke-Task "Checking SSH Key Synchronization" -Task {
     $exists = wsl bash -c "[ -f $wslKeyPath ] && echo 'true' || echo 'false'"
@@ -93,13 +93,20 @@ Invoke-Task "Checking SSH Key Synchronization" -Task {
     }
 }
 
-# 4. Sincronizar solo si es necesario
+
+# Sincronizar solo si es necesario
 Invoke-Task "Syncing Private Key to WSL" -SkipCondition ([bool](-not $needsSync)) -Task {
     wsl bash -c "mkdir -p ~/.ssh && cp '$winKeyPathLinuxFormat' $wslKeyPath && chmod 600 $wslKeyPath"
     wsl sed -i 's/\r$//' $wslKeyPath
 }
 
-# 5. Generar y GUARDAR datos de Cloud-Init
+
+# ---------------------------------------------------------
+# SECTION 3: Cloud-Init & Security
+# ---------------------------------------------------------
+Write-SectionHeader "Cloud-Init & Security"
+
+# Generar y GUARDAR datos de Cloud-Init
 $UserDataPath = Join-Path $CloudInitPath "user-data"
 $MetaDataPath = Join-Path $CloudInitPath "meta-data"
 
@@ -113,7 +120,7 @@ Invoke-Task "Generating Cloud-Init YAML Data" -Task {
     $MetaDataYAML | Out-File -FilePath $MetaDataPath -Encoding ASCII -Force
 }
 
-# 6. Crear el ISO (Se borra y crea siempre para asegurar frescura)
+# Crear el ISO (Se borra y crea siempre para asegurar frescura)
 if (Test-Path $IsoFile) { Remove-Item $IsoFile -Force }
 
 Invoke-Task "Building Seed ISO (genisoimage)" -Task {
@@ -122,29 +129,38 @@ Invoke-Task "Building Seed ISO (genisoimage)" -Task {
     wsl genisoimage -output "$wslTarget" -volid cidata -joliet -rock -graft-points "user-data=$wslSource/user-data" "meta-data=$wslSource/meta-data"
 }
 
-# 7. Limpieza
+# Limpieza
 Invoke-Task "Cleaning Cloud-Init Temp Files" -Task {
     Remove-Item -Path $UserDataPath, $MetaDataPath -Force -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------
-# SECTION 3: Infrastructure Deployment
+# SECTION 4: Infrastructure Deployment
 # ---------------------------------------------------------
-Write-SectionHeader -Title "3. Hyper-V Provisioning"
+Write-SectionHeader -Title "Hyper-V Provisioning"
 
-Invoke-Task "Stopping existing VM instance" -Task {
-    if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) { 
-        Stop-VM -Name $VMName -Force -TurnOff -ErrorAction SilentlyContinue 
-    }
+# --- LÓGICA DE RECURSOS DINÁMICOS (BONUS) ---
+$Templates = @{
+    "small"  = @{ cpu = 1; ram = 1GB }
+    "medium" = @{ cpu = 2; ram = 2GB }
+    "large"  = @{ cpu = 4; ram = 4GB }
 }
 
-Invoke-Task "Removing old VM registration" -Task {
-    if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) { 
-        Remove-VM -Name $VMName -Force 
-    }
+# Si no pasaste un Size, el script elige dinámicamente por nombre (BONUS)
+if ([string]::IsNullOrWhiteSpace($Size)) {
+    if ($VMName -match "db" -or $VMName -match "sql") { $Size = "medium" }
+    elseif ($VMName -match "web" -or $VMName -match "prod") { $Size = "large" }
+    else { $Size = "small" }
 }
 
-Invoke-Task "Recreating VM Directory" -Task {
+$VMCpu = $Templates[$Size].cpu
+$VMMemoryBytes = $Templates[$Size].ram
+
+Write-Host " [i] Perfil de recursos: [$($Size.ToUpper())] -> $VMCpu vCPU, $($VMMemoryBytes/1GB)GB RAM" -ForegroundColor Cyan
+# --------------------------------------------
+
+
+Invoke-Task "Creating VM Directory" -Task {
     if (Test-Path $VMDir) { Remove-Item $VMDir -Recurse -Force }
     New-Item -ItemType Directory -Path $VMDir -Force
 }
@@ -174,6 +190,12 @@ Invoke-Task "Configuring Boot Order" -Task {
     $dvdDrive = Get-VMDvdDrive -VMName $VMName
     Set-VMFirmware -VMName $VMName -BootOrder $vhdDrive, $dvdDrive
 }
+
+
+# ---------------------------------------------------------
+# SECTION 5: Deployment
+# ---------------------------------------------------------
+
 
 Invoke-Task "Powering On Virtual Machine" -Task {
     Start-VM -Name $VMName

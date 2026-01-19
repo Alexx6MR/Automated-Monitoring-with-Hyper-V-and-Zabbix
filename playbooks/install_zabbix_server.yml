@@ -7,15 +7,38 @@
     ansible_user: deploy
     ansible_ssh_private_key_file: "~/.ssh/deploy_key"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
-    db_password: "TuPasswordSeguro"
-    timezone: "Europe/Madrid"
+    db_password: "Password"
+    timezone: "Europe/Stockholm"
     repo_rpm_url: "https://repo.zabbix.com/zabbix/7.0/alma/9/x86_64/zabbix-release-latest.el9.noarch.rpm"
+    
+    # CENTRALIZACIÓN DE CREDENCIALES ZABBIX API
+    zbx_api_user: "Admin"
+    zbx_api_pass: "zabbix"
+    zbx_api_path: "zabbix"
+    
+
+    # CENTRALIZACIÓN DE CREDENCIALES ZABBIX API
+    zbx_api_user_email: "alexeimartinez.rod@gmail.com"
+    zbx_admin_user_username: "Alexei"
+    zbx_admin_user_name: "Alexei Martinez"
+    zbx_admin_user_surname: "AlexeiMR"
+    zbx_admin_user_password: "AlexPass123"
+
+  handlers:
+    - name: restart zabbix-services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop: [zabbix-server, zabbix-agent2, httpd, mariadb]
 
   tasks:
     - name: Ensure Base configuration is installed
       include_tasks: default_config.yml
       
-    # 1. System Preparation
+    
+    # ---------------------------------------------------------
+    #  System Preparation
+    # ---------------------------------------------------------
     - name: Wait for cloud-init to finish
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
@@ -28,7 +51,10 @@
         validate_certs: false
         disable_gpg_check: true
 
-    # 2. Database Engine Installation
+   
+    # ---------------------------------------------------------
+    #  Database Engine Installation
+    # ---------------------------------------------------------
     - name: Install MariaDB Server and MySQL Python dependencies
       ansible.builtin.dnf:
         name:
@@ -42,7 +68,9 @@
         state: started
         enabled: true
 
-    # 3. Zabbix Database & User Creation
+    # ---------------------------------------------------------
+    #  Zabbix Database & User Creation
+    # ---------------------------------------------------------
     - name: Create Zabbix database
       community.mysql.mysql_db:
         name: zabbix
@@ -57,7 +85,10 @@
         priv: 'zabbix.*:ALL'
         login_unix_socket: /var/lib/mysql/mysql.sock
 
-    # 4. Zabbix Core Installation
+     
+    # ---------------------------------------------------------
+    #  Zabbix Core Installation
+    # ---------------------------------------------------------
     - name: Install Zabbix Server, Web Frontend, and Agent 2
       ansible.builtin.dnf:
         name:
@@ -76,7 +107,10 @@
       args:
         creates: /var/lib/mysql/zabbix/hosts.ibd
 
-    # 5. Configuration & Templating
+    
+    # ---------------------------------------------------------
+    #  Configuration & Templating
+    # ---------------------------------------------------------
     - name: Configure Database password in zabbix_server.conf
       ansible.builtin.lineinfile:
         path: /etc/zabbix/zabbix_server.conf
@@ -99,7 +133,10 @@
         line: "date.timezone = {{ timezone }}"
       notify: restart zabbix-services
 
-    # 6. Security & Firewall (CRUCIAL)
+    
+    # ---------------------------------------------------------
+    #  Security & Firewall
+    # ---------------------------------------------------------
     - name: Open Firewall ports
       ansible.posix.firewalld:
         service: "{{ item }}"
@@ -133,7 +170,7 @@
         - { regexp: '^Hostname=', line: "Hostname={{ inventory_hostname }}" }
       notify: restart zabbix-services
 
-    - name: Install pip for Python
+    - name: Install pip and zabbix-api
       ansible.builtin.dnf:
         name: python3-pip
         state: present
@@ -142,16 +179,18 @@
       ansible.builtin.pip:
         name: zabbix-api
 
-    # 7. Activation & API
-    - name: Force all notified handlers to run at this point
+    # ---------------------------------------------------------
+    #  Activation & API
+    # ---------------------------------------------------------
+    - name: Force handlers
       ansible.builtin.meta: flush_handlers
     
-    - name: Wait for Zabbix Web to be ready
+    - name: Wait for Zabbix Web
       ansible.builtin.wait_for:
         port: 80
         host: "{{ ansible_host }}"
         delay: 5
-        timeout: 90 # Aumentado a 90 por si Apache tarda un poco más
+        timeout: 90
         
     - name: "Configure Zabbix Autoregistration Action"
       community.zabbix.zabbix_action:
@@ -167,32 +206,93 @@
         operations:
           - type: "add_host"
           - type: "add_to_host_group"
-            host_groups:
-              - "Linux servers"
+            host_groups: ["Linux servers"]
           - type: "link_to_template"
-            templates:
-              - "Linux by Zabbix agent"
-              # - "Linux by Zabbix agent active"
+            templates: ["Linux by Zabbix agent"]
       vars:
         ansible_network_os: community.zabbix.zabbix
         ansible_connection: httpapi
         ansible_httpapi_port: 80
         ansible_httpapi_use_ssl: false
-        ansible_zabbix_url_path: "zabbix"
+        ansible_zabbix_url_path: "{{ zbx_api_path }}"
         ansible_host: "{{ ansible_host }}"
-        ansible_httpapi_user: "Admin"     
-        ansible_httpapi_pass: "zabbix"
-        ansible_user: "Admin" 
+        ansible_httpapi_user: "{{ zbx_api_user }}"
+        ansible_httpapi_pass: "{{ zbx_api_pass }}"
+        ansible_user: "{{ zbx_api_user }}"
+      delegate_to: localhost
+      run_once: true    
+    
+    # ---------------------------------------------------------
+    #  BONUS: Create trigger and Admin User info
+    # ---------------------------------------------------------
+    - name: "Configure Admin User Group and Media"
+      community.zabbix.zabbix_user:
+        username: "{{ zbx_admin_user_username }}"
+        name: "{{ zbx_admin_user_name }}"
+        surname: "{{ zbx_admin_user_surname }}"
+        passwd: "{{ zbx_admin_user_password }}" 
+        usrgrps:
+          - Guests
+          - Disabled
+          - Zabbix administrators
+        lang: en_US
+        theme: blue-theme
+        autologin: false
+        autologout: "0"
+        refresh: "30"
+        rows_per_page: "200"
+        after_login_url: ""
+        user_medias:
+          - mediatype: Email
+            sendto:
+              - "{{ zbx_api_user_email }}"
+            period: 1-7,00:00-24:00
+            severity:
+              not_classified: false
+              information: true
+              warning: true
+              average: true
+              high: true
+              disaster: true
+            active: true
+        state: present
+      vars:
+        ansible_network_os: community.zabbix.zabbix
+        ansible_connection: httpapi
+        ansible_httpapi_port: 80
+        ansible_httpapi_use_ssl: false
+        ansible_zabbix_url_path: "{{ zbx_api_path }}"
+        ansible_host: "{{ ansible_host }}"
+        ansible_httpapi_user: "{{ zbx_api_user }}"
+        ansible_httpapi_pass: "{{ zbx_api_pass }}"
+        ansible_user: "{{ zbx_api_user }}"
       delegate_to: localhost
       run_once: true
-
-  handlers:
-    - name: restart zabbix-services
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-        state: restarted
-      loop:
-        - zabbix-server
-        - zabbix-agent2
-        - httpd
-        - mariadb
+      
+    - name: "Configure Zabbix Alerts: High CPU & Memory"
+      community.zabbix.zabbix_action:
+        name: "Alert: High Resource Usage on Nodes"
+        event_source: "trigger"
+        state: present
+        status: enabled
+        esc_period: "1h"
+        conditions:
+          - type: "trigger_severity"
+            operator: ">="
+            value: "average"
+        operations:
+          - type: "send_message"
+            media_type: "Email"
+            send_to_groups: ["Zabbix administrators"]
+      vars:
+        ansible_network_os: community.zabbix.zabbix
+        ansible_connection: httpapi
+        ansible_httpapi_port: 80
+        ansible_httpapi_use_ssl: false
+        ansible_zabbix_url_path: "{{ zbx_api_path }}"
+        ansible_host: "{{ ansible_host }}"
+        ansible_httpapi_user: "{{ zbx_api_user }}"
+        ansible_httpapi_pass: "{{ zbx_api_pass }}"
+        ansible_user: "{{ zbx_api_user }}"
+      delegate_to: localhost
+      run_once: true
