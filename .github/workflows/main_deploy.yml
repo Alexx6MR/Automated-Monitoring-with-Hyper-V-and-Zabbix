@@ -1,63 +1,101 @@
-name: Infrastructure CI/CD & State Sync
+name: Infrastructure CI (Hyper-V + Ansible)
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+
+concurrency:
+  group: infra-ci
+  cancel-in-progress: false
 
 jobs:
-  validate-and-sync:
+  preflight:
+    name: Preflight checks (Runner sanity)
     runs-on: self-hosted
+    outputs:
+      hyperv: ${{ steps.hyperv.outputs.enabled }}
     steps:
-      - name: Checkout Repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Validate PowerShell Syntax
-        shell: powershell
+      - name: Check Hyper-V availability
+        id: hyperv
+        shell: pwsh
         run: |
-          $scripts = Get-ChildItem -Recurse -Include *.ps1, *.psm1
-          foreach ($file in $scripts) {
-              Write-Host "Checking: $($file.FullName)"
-              $parseError = $null
-              # Usamos [ref]$parseError en lugar de [ref]$error
-              [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$parseError)
-              if ($parseError) {
-                  Write-Error "Syntax error in $($file.Name): $($parseError.Message)"
-                  exit 1
-              }
+          $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
+          if ($feature.State -ne "Enabled") {
+            Write-Host "::warning::Hyper-V is NOT enabled on this runner."
+            echo "enabled=false" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "enabled=true" >> $env:GITHUB_OUTPUT
           }
 
-      - name: Validate Ansible Syntax (via WSL)
+      - name: Check WSL & Fedora
+        shell: pwsh
         run: |
-          wsl ansible-playbook playbooks/setup_zabbix_host.yml --syntax-check
+          wsl --status
+          wsl -d Fedora -- uname -a
 
-      - name: Verify State Integrity
-        shell: powershell
-        run: |
-          if (-not (Test-Path "fake_db.yml")) {
-              Write-Error "Critical Error: fake_db.yml is missing!"
-              exit 1
-          }
-      
-      - name: Deploy Zabbix Core Infrastructure
-        shell: powershell
-        run: |
-          ./powershell/Create-VM.ps1 -VMName "Zabbix-Server" -Size "Large" -Role "Server"
-          
-      - name: Install Zabbix Server via Ansible
-        run: |
-          wsl ansible-playbook playbooks/install_zabbix_server.yml -e "target=Zabbix-Server"
+  provision:
+    name: Provision VM (real infra)
+    needs: preflight
+    if: needs.preflight.outputs.hyperv == 'true'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Execute VM Provisioning (Zabbix Nodes)
-        shell: powershell
+      - name: Inject SSH secrets
+        shell: pwsh
         run: |
-          # Vi anropar Create-VM med parametrar för de olika rollerna
-          # Här skapas agenter/noder som ska övervakas
-          ./powershell/Create-VM.ps1 -VMName "Zabbix-Agent-Web" -Size "Small"
-          ./powershell/Create-VM.ps1 -VMName "Zabbix-Agent-DB" -Size "Large"
-          
-      - name: Run Ansible Configuration
+          New-Item -ItemType Directory -Force powershell/secrets
+          Set-Content powershell/secrets/deploy_key "${{ secrets.DEPLOY_KEY }}"
+          Set-Content powershell/secrets/deploy_key.pub "${{ secrets.DEPLOY_KEY_PUB }}"
+          icacls powershell/secrets/deploy_key /inheritance:r /grant:r "$($env:USERNAME):(R)"
+
+      - name: Create VM via Hyper-V
+        shell: pwsh
         run: |
-          # Efter att VM skapats körs konfigurationen via WSL
-          wsl ansible-playbook playbooks/setup_zabbix_host.yml
+          ./powershell/Create-VM.ps1 -NonInteractive -CI
+
+  configure:
+    name: Configure VM (Ansible via WSL)
+    needs: provision
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Ansible playbooks
+        shell: pwsh
+        run: |
+          wsl -d Fedora -- ansible-playbook playbooks/install_zabbix_server.yml
+
+  smoke-tests:
+    name: Smoke tests (infra reality check)
+    needs: configure
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate VM is reachable
+        shell: pwsh
+        run: |
+          ./powershell/utils/common.ps1
+          Test-Connection -ComputerName (Get-VM | Select-Object -First 1).Name -Count 2
+
+      - name: Check Zabbix service
+        shell: pwsh
+        run: |
+          wsl -d Fedora -- curl -f http://localhost/zabbix || exit 1
+
+  teardown:
+    name: Teardown (always clean)
+    if: always()
+    needs: [provision, configure, smoke-tests]
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove VM safely
+        shell: pwsh
+        run: |
+          ./powershell/Remove-VM.ps1 -CI -Force
