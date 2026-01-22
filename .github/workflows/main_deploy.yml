@@ -20,7 +20,7 @@ jobs:
 
       - name: Check Hyper-V availability
         id: hyperv
-        shell: pwsh
+        shell: powershell
         run: |
           $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
           if ($feature.State -ne "Enabled") {
@@ -31,7 +31,7 @@ jobs:
           }
 
       - name: Check WSL & Fedora
-        shell: pwsh
+        shell: powershell
         run: |
           wsl --status
           wsl -d Fedora -- uname -a
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Inject SSH secrets
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force powershell/secrets
           Set-Content powershell/secrets/deploy_key "${{ secrets.DEPLOY_KEY }}"
@@ -53,7 +53,7 @@ jobs:
           icacls powershell/secrets/deploy_key /inheritance:r /grant:r "$($env:USERNAME):(R)"
 
       - name: Create VM via Hyper-V
-        shell: pwsh
+        shell: powershell
         run: |
           ./powershell/Create-VM.ps1 -NonInteractive -CI
 
@@ -65,7 +65,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Ansible playbooks
-        shell: pwsh
+        shell: powershell
         run: |
           wsl -d Fedora -- ansible-playbook playbooks/install_zabbix_server.yml
 
@@ -77,13 +77,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate VM is reachable
-        shell: pwsh
+        shell: powershell
         run: |
           ./powershell/utils/common.ps1
           Test-Connection -ComputerName (Get-VM | Select-Object -First 1).Name -Count 2
 
       - name: Check Zabbix service
-        shell: pwsh
+        shell: powershell
         run: |
           wsl -d Fedora -- curl -f http://localhost/zabbix || exit 1
 
@@ -96,6 +96,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Remove VM safely
-        shell: pwsh
+        shell: powershell
         run: |
           ./powershell/Remove-VM.ps1 -CI -Force
