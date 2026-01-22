@@ -73,7 +73,7 @@ if ( $targetVM -ne "zabbix-server"){
 
     Write-Host " [+] Zabbix updated: Host removed." -ForegroundColor Green
 } else {
-    Write-Host " [i] Node '$VMName' detected as Server. Skipping infrastructure setup." -ForegroundColor Cyan
+    Write-Host " [i] Node 'zabbix-server' detected as Server. Skipping infrastructure setup." -ForegroundColor Cyan
 }
 
 

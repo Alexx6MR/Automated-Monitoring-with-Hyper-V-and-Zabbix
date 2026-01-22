@@ -17,17 +17,18 @@ $PrivKey           = "./powershell/secrets/deploy_key"
 $UserDataTemplateScript = Join-Path $CloudInitPath "user-data.ps1"
 $MetaDataTemplateScript = Join-Path $CloudInitPath "meta-data.ps1"
 $VMsDir           = Join-Path $ProjectRoot "vms"
+$ZabbixServerName = "zabbix-server"
 
 # --- BANNER ---
 Clear-Host
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "          WELCOME TO VM AUTOMATION TOOL" -ForegroundColor White -BackgroundColor DarkBlue
+Write-Host "          WELCOME TO VM AUTOMATION TOOL" -ForegroundColor White
 Write-Host "            Created by Alexei Martinez" -ForegroundColor Yellow
 Write-Host "==========================================================`n" -ForegroundColor Cyan
 
 # --- Initial Infrastructure Check ---
-Invoke-Task "Checking Zabbix-Server Status" -SkipCondition ([bool](Get-VM -Name "zabbix-server" -ErrorAction SilentlyContinue)) -Task {
-    $global:ZabbixVM = Get-VM -Name "zabbix-server" -ErrorAction SilentlyContinue
+Invoke-Task "Checking Zabbix-Server Status" -SkipCondition ([bool](Get-VM -Name $ZabbixServerName -ErrorAction SilentlyContinue)) -Task {
+    $global:ZabbixVM = Get-VM -Name $ZabbixServerName -ErrorAction SilentlyContinue
 }
 
 Invoke-Task "Ensuring fake_db existence" -Task {
@@ -72,7 +73,7 @@ do {
         "1" {
             Write-SectionHeader -Title "DEPLOYING ZABBIX-SERVER"
 
-            $existingVM = Get-VM -Name "zabbix-server" -ErrorAction SilentlyContinue
+            $existingVM = Get-VM -Name $ZabbixServerName -ErrorAction SilentlyContinue
 
             if ($existingVM) {
                 # --- SCENARIO A: VM ALREADY EXISTS ---
@@ -86,7 +87,7 @@ do {
                 } else {
                     # If it has no IP (off or loading), we run the wait task
                     Invoke-Task "Waiting for Network/IP Assignment" -Task {
-                        $res = Get-VMIPAddress -VMName "zabbix-server"
+                        $res = Get-VMIPAddress -VMName $ZabbixServerName
                         if ($res.Status -eq "Success") { $global:serverIP = $res.IP } else { throw "Could not retrieve IP address." }
                     }
                 }   
@@ -103,8 +104,8 @@ do {
             } else {
 
                 # Step 1: Run the atomic creation script
-                Invoke-Task "Provisioning Virtual Machine" -SkipCondition ([bool](Get-VM -Name "zabbix-server" -ErrorAction SilentlyContinue)) -Task {
-                    & $CreateVmScript -VMName "zabbix-server" -Size "large" `
+                Invoke-Task "Provisioning Virtual Machine" -SkipCondition ([bool](Get-VM -Name $ZabbixServerName -ErrorAction SilentlyContinue)) -Task {
+                    & $CreateVmScript -VMName $ZabbixServerName -Size "large" `
                         -TemplatesDir $TemplatesDir -TemplatePath $TemplatePath -TemplateUrl $TemplateUrl `
                         -VMsDir $VMsDir -CloudInitPath $CloudInitPath -PrivKey $PrivKey `
                         -UserDataTemplateScript $UserDataTemplateScript -MetaDataTemplateScript $MetaDataTemplateScript
@@ -114,7 +115,7 @@ do {
 
                 # Step 2: Obtain IP (with internal retries)
                 Invoke-Task "Waiting for Network/IP Assignment" -Task {
-                    $res = Get-VMIPAddress -VMName "zabbix-server"
+                    $res = Get-VMIPAddress -VMName $ZabbixServerName
                     if ($res.Status -eq "Success") { $global:serverIP = $res.IP } else { throw "Could not retrieve IP address." }
                 }
 
@@ -136,7 +137,7 @@ do {
 
                     # debug mode
                     if (-not $global:serverIP ) {
-                        $global:serverIP = "192.168.1.113"
+                        $global:serverIP = ""
                     }
 
                     if ([string]::IsNullOrWhiteSpace($global:serverIP)) { throw "Server IP is null or empty." }
@@ -229,7 +230,7 @@ do {
                         $global:IP = $VMObj.NetworkAdapters.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
 
                         Invoke-Task "Waiting for Network/IP Assignment" -Task {
-                            $res = Get-VMIPAddress -VMName "zabbix-server"
+                            $res = Get-VMIPAddress -VMName $VMName
                             if ($res.Status -eq "Success") { $global:IP = $res.IP } else { throw "Could not retrieve IP address." }
                         }
 
@@ -262,7 +263,7 @@ do {
                     # 1. Extract only the IPs from completed nodes
                     $IPList = $CompletedNodes | ForEach-Object { $_.IP }
                     if (-not $IPList) {
-                        $IPList = @("192.168.1.102")
+                        $IPList = @("")
                     }
         
                     # 2. Create dynamic inventory (Ex: "192.168.1.10,192.168.1.11,")

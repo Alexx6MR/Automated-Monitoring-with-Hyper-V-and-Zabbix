@@ -23,7 +23,7 @@ Param(
 . "$PSScriptRoot\utils\common.ps1"
 $ErrorActionPreference = "Stop"
 
-# --- RUTAS INTERNAS ---
+# --- INTERNAL PATHS ---
 $QcowPath   = Join-Path $TemplatesDir "almalinux-10-temp.qcow2"
 $IsoFile    = Join-Path $CloudInitPath "$VMName-seed.iso"
 $VMDir      = Join-Path $VMsDir $VMName
@@ -43,15 +43,15 @@ Invoke-Task "Downloading AlmaLinux 10 Image" -SkipCondition  ((Test-Path $QcowPa
 }
 
 Invoke-Task "Checking and Installing QEMU Utilities in WSL" -Task {
-    # Verificamos si qemu-img (parte de qemu-utils) existe
+    # Check if qemu-img (part of qemu-utils) exists
     $isInstalled = wsl which qemu-img
     
     if (-not $isInstalled) {
-        Write-Host "qemu-utils no encontrado. Instalando..." -ForegroundColor Cyan
+        Write-Host "qemu-utils not found. Installing..." -ForegroundColor Cyan
         wsl sudo apt-get update -y
         wsl sudo apt-get install qemu-utils -y
     } else {
-        Write-Host "qemu-utils ya está instalado. Saltando paso." -ForegroundColor Green
+        Write-Host "qemu-utils is already installed. Skipping step." -ForegroundColor Green
     }
 }
 
@@ -70,19 +70,19 @@ Invoke-Task "Cleaning Temporary QCOW2 File" -SkipCondition (-not (Test-Path $Qco
 # ---------------------------------------------------------
 Write-SectionHeader "SSH Implementation"
 
-# Aseguramos la existencia de la pareja de llaves en Windows
+# Ensure SSH key pair existence in Windows
 Invoke-Task "Verifying SSH Key Pair" -SkipCondition ([bool]((Test-Path $PrivKey) -and (Test-Path "$PrivKey.pub"))) -Task {
     ssh-keygen -t ed25519 -N '""' -f "$PrivKey" -q
 }
 
-# Identificar rutas de WSL (Paso preparatorio silencioso)
+# Identify WSL paths (Silent preparatory step)
 $wslUser    = wsl whoami
 $homeDir    = if ($wslUser -eq "root") { "/root" } else { "/home/$wslUser" }
 $wslKeyPath = "$homeDir/.ssh/deploy_key"
 $winKeyPathLinuxFormat = wsl wslpath -u "$PrivKey"
 
 
-# Comparar llaves (Determinar si hace falta sincronizar)
+# Compare keys (Determine if synchronization is needed)
 $needsSync = $true
 Invoke-Task "Checking SSH Key Synchronization" -Task {
     $exists = wsl bash -c "[ -f $wslKeyPath ] && echo 'true' || echo 'false'"
@@ -94,7 +94,7 @@ Invoke-Task "Checking SSH Key Synchronization" -Task {
 }
 
 
-# Sincronizar solo si es necesario
+# Synchronize only if necessary
 Invoke-Task "Syncing Private Key to WSL" -SkipCondition ([bool](-not $needsSync)) -Task {
     wsl bash -c "mkdir -p ~/.ssh && cp '$winKeyPathLinuxFormat' $wslKeyPath && chmod 600 $wslKeyPath"
     wsl sed -i 's/\r$//' $wslKeyPath
@@ -106,7 +106,7 @@ Invoke-Task "Syncing Private Key to WSL" -SkipCondition ([bool](-not $needsSync)
 # ---------------------------------------------------------
 Write-SectionHeader "Cloud-Init & Security"
 
-# Generar y GUARDAR datos de Cloud-Init
+# Generate and SAVE Cloud-Init data
 $UserDataPath = Join-Path $CloudInitPath "user-data"
 $MetaDataPath = Join-Path $CloudInitPath "meta-data"
 
@@ -115,12 +115,12 @@ Invoke-Task "Generating Cloud-Init YAML Data" -Task {
     $UserDataYAML = & $UserDataTemplateScript -SSHKey $PubKey -VMName $VMName
     $MetaDataYAML = & $MetaDataTemplateScript -VMName $VMName
     
-    # IMPORTANTE: Guardamos físicamente los archivos para genisoimage
+    # IMPORTANT: Save files physically for genisoimage
     $UserDataYAML | Out-File -FilePath $UserDataPath -Encoding ASCII -Force
     $MetaDataYAML | Out-File -FilePath $MetaDataPath -Encoding ASCII -Force
 }
 
-# Crear el ISO (Se borra y crea siempre para asegurar frescura)
+# Create ISO (Always delete and recreate to ensure freshness)
 if (Test-Path $IsoFile) { Remove-Item $IsoFile -Force }
 
 Invoke-Task "Building Seed ISO (genisoimage)" -Task {
@@ -129,7 +129,7 @@ Invoke-Task "Building Seed ISO (genisoimage)" -Task {
     wsl genisoimage -output "$wslTarget" -volid cidata -joliet -rock -graft-points "user-data=$wslSource/user-data" "meta-data=$wslSource/meta-data"
 }
 
-# Limpieza
+# Cleanup
 Invoke-Task "Cleaning Cloud-Init Temp Files" -Task {
     Remove-Item -Path $UserDataPath, $MetaDataPath -Force -ErrorAction SilentlyContinue
 }
@@ -139,14 +139,14 @@ Invoke-Task "Cleaning Cloud-Init Temp Files" -Task {
 # ---------------------------------------------------------
 Write-SectionHeader -Title "Hyper-V Provisioning"
 
-# --- LÓGICA DE RECURSOS DINÁMICOS (BONUS) ---
+# --- DYNAMIC RESOURCE LOGIC ---
 $Templates = @{
     "small"  = @{ cpu = 1; ram = 1GB }
     "medium" = @{ cpu = 2; ram = 2GB }
     "large"  = @{ cpu = 4; ram = 4GB }
 }
 
-# Si no pasaste un Size, el script elige dinámicamente por nombre (BONUS)
+# If no Size was passed, script chooses dynamically by name
 if ([string]::IsNullOrWhiteSpace($Size)) {
     if ($VMName -match "db" -or $VMName -match "sql") { $Size = "medium" }
     elseif ($VMName -match "web" -or $VMName -match "prod") { $Size = "large" }
@@ -156,7 +156,7 @@ if ([string]::IsNullOrWhiteSpace($Size)) {
 $VMCpu = $Templates[$Size].cpu
 $VMMemoryBytes = $Templates[$Size].ram
 
-Write-Host " [i] Perfil de recursos: [$($Size.ToUpper())] -> $VMCpu vCPU, $($VMMemoryBytes/1GB)GB RAM" -ForegroundColor Cyan
+Write-Host " [i] Resource Profile: [$($Size.ToUpper())] -> $VMCpu vCPU, $($VMMemoryBytes/1GB)GB RAM" -ForegroundColor Cyan
 # --------------------------------------------
 
 

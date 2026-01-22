@@ -1,7 +1,7 @@
 ---
-# 1. Configuración de Idioma (Simplificada para evitar bloqueos)
+# 1. Language Configuration (Simplified to avoid lockouts)
 - name: Install Swedish language pack
-  ansible.builtin.dnf: # Usamos dnf directamente que es más rápido en AlmaLinux
+  ansible.builtin.dnf: # Using dnf directly as it is faster on AlmaLinux
     name: glibc-langpack-sv
     state: present
 
@@ -11,7 +11,7 @@
     localectl set-x11-keymap se
   changed_when: false
 
-# 2. Actualización y Herramientas (Agrupado para una sola transacción DNF)
+# 2. Updates and Tools (Grouped into a single DNF transaction)
 - name: Install base administration tools
   ansible.builtin.dnf:
     name:
@@ -24,7 +24,7 @@
       - python3-firewall
     state: present
 
-# 3. Seguridad: Firewall
+# 3. Security: Firewall
 - name: Ensure firewalld is running
   ansible.builtin.systemd:
     name: firewalld
@@ -43,7 +43,7 @@
     - https
     - mysql
 
-# 4. Configuración de /etc/hosts
+# 4. /etc/hosts Configuration
 - name: Ensure localhost is mapped correctly
   ansible.builtin.lineinfile:
     path: /etc/hosts
@@ -51,7 +51,7 @@
     line: "127.0.0.1 localhost localhost.localdomain"
     state: present
 
-# 5. Red (ELIMINADO EL REINICIO DE CONEXIÓN)
+# 5. Network (CONNECTION RESTART REMOVED)
 - name: Configure persistent DHCP identity
   community.general.nmcli:
     conn_name: "eth0"
@@ -59,6 +59,6 @@
     type: ethernet
     dhcp_client_id: "{{ ansible_hostname }}"
     state: present
-  # No reiniciamos la conexión aquí. El cambio se aplicará solo
-  # en el próximo reboot o cuando sea estrictamente necesario,
-  # evitando que Ansible se quede "colgado" esperando el SSH.
+  # We do not restart the connection here. The change will apply
+  # on the next reboot or when strictly necessary, preventing 
+  # Ansible from hanging while waiting for SSH.

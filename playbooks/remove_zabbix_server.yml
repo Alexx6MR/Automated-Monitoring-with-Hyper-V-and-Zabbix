@@ -6,14 +6,14 @@
     - "../fake_db.yml"
 
   vars:
-    # Mantenemos tus variables de conexión para el inventario
+    # Connection variables for the inventory
     ansible_user: deploy
     ansible_ssh_private_key_file: "~/.ssh/deploy_key"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     zabbix_api_url: "http://{{ zabbix_server_ip }}/zabbix/api_jsonrpc.php"
 
   tasks:
-    - name: "Obteniendo el ID del host {{ VMName }}"
+    - name: "Getting host ID for {{ VMName }}"
       ansible.builtin.uri:
         url: "{{ zabbix_api_url }}"
         method: POST
@@ -24,12 +24,11 @@
           params:
             filter:
               host: ["{{ VMName }}"]
-          auth: null # En Zabbix 6.4/7.0 user.login se puede omitir si pasas credenciales
+          auth: null # In Zabbix 6.4/7.0 user.login can be omitted if credentials are passed
           id: 1
-        # Para simplificar, primero nos logueamos para obtener un token
       register: host_lookup
 
-    - name: "Login en Zabbix para obtener Token"
+    - name: "Login to Zabbix to obtain API Token"
       ansible.builtin.uri:
         url: "{{ zabbix_api_url }}"
         method: POST
@@ -43,7 +42,7 @@
           id: 1
       register: login_result
 
-    - name: "Buscando ID de {{ VMName }}"
+    - name: "Searching for ID of {{ VMName }}"
       ansible.builtin.uri:
         url: "{{ zabbix_api_url }}"
         method: POST
@@ -58,7 +57,7 @@
           id: 2
       register: host_search
 
-    - name: "Eliminando host de Zabbix"
+    - name: "Deleting host from Zabbix"
       ansible.builtin.uri:
         url: "{{ zabbix_api_url }}"
         method: POST
@@ -73,7 +72,7 @@
       when: host_search.json.result | length > 0
       register: delete_final
 
-    - name: Resultado
+    - name: Display Removal Result
       ansible.builtin.debug:
-        msg: "Host {{ VMName }} eliminado correctamente de la base de datos."
+        msg: "Host {{ VMName }} successfully removed from the database."
       when: delete_final is changed

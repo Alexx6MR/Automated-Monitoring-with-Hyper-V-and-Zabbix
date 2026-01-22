@@ -5,13 +5,12 @@
   become: yes
 
   vars_files:
-    - "../fake_db.yml"  # <--- PRIORIDAD ALTA: Ansible buscará zabbix_server_ip aquí
+    - "../fake_db.yml"  # <--- HIGH PRIORITY: Ansible looks for zabbix_server_ip here
 
   vars:
     ansible_user: deploy
     ansible_ssh_private_key_file: "~/.ssh/deploy_key"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
-    # Borramos el lookup de aquí para evitar conflictos
     repo_rpm_url: "https://repo.zabbix.com/zabbix/7.0/alma/9/x86_64/zabbix-release-latest.el9.noarch.rpm"
 
   handlers:
@@ -21,7 +20,7 @@
         state: restarted
 
   tasks:
-    # 1. Ejecuta la configuración de Suecia, herramientas y firewall base
+    # 1. Runs Swedish locale config, base tools, and firewall setup
     - name: Ensure Base configuration is installed
       ansible.builtin.include_tasks: default_config.yml
 
@@ -51,7 +50,7 @@
           - python3-firewall
         state: present
 
-    - name: Configure Zabbix Agent 2 (Fix Identity)
+    - name: Configure Zabbix Agent 2 (Identity & Metadata)
       ansible.builtin.lineinfile:
         path: /etc/zabbix/zabbix_agent2.conf
         regexp: "{{ item.regexp }}"
@@ -98,8 +97,8 @@
         -k "agent.ping" 
         -o 1
       register: sender_result
-      # Usamos ignore_errors o failed_when porque a veces el primer saludo 
-      # falla si el servidor aún no ha procesado el autoregistro.
+      # Failed_when is false because the first handshake might 
+      # fail if the server hasn't processed autoregistration yet.
       failed_when: false
 
     - name: Restart Zabbix Agent 2 to refresh active checks

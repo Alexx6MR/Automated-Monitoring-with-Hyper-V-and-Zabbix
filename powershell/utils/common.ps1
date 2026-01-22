@@ -10,7 +10,7 @@ function Write-SectionHeader {
     Write-Host "# ---------------------------------------------------------" -ForegroundColor Magenta
 }
 
-# 2. Main Task Wrapper con salida fluida
+# 2. Main Task Wrapper with smooth output
 function Invoke-Task {
     [CmdletBinding()]
     Param(
@@ -31,15 +31,15 @@ function Invoke-Task {
     Write-Host "$Pending $Label..." -NoNewline -ForegroundColor Gray
 
     try {
-        # Se elimina Out-Null para permitir que Ansible y otros scripts muestren progreso
+        # Out-Null is removed to allow Ansible and other scripts to display progress
         & $Task 
         Write-Host "`r$Success $Label" -ForegroundColor Green
     }
     catch {
         Write-Host "`r$Failure $Label" -ForegroundColor Red
         Write-Host "`n" + ("=" * 60) -ForegroundColor Red
-        Write-Host " ERROR FATAL EN PASO: [$Label]" -ForegroundColor Red
-        Write-Host " DETALLE: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host " FATAL ERROR IN STEP: [$Label]" -ForegroundColor Red
+        Write-Host " DETAIL: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host ("=" * 60) + "`n" -ForegroundColor Red
         exit 1
     }
@@ -65,7 +65,7 @@ function Get-VMIPAddress {
 
         if ($null -eq $ip) {
             $elapsed = [math]::Round($timer.Elapsed.TotalSeconds)
-            Write-Host ("`r [i] Esperando IP ({0}s / {1}s)... " -f $elapsed, $TimeoutSeconds) -NoNewline -ForegroundColor Gray
+            Write-Host ("`r [i] Waiting for IP ({0}s / {1}s)... " -f $elapsed, $TimeoutSeconds) -NoNewline -ForegroundColor Gray
             Start-Sleep -Seconds 2
         }
     }
@@ -117,7 +117,7 @@ function Show-NodeBox {
     Write-Host "# ---------------------------------------------------------" -ForegroundColor $Color
     Write-Host "#  Management IP: $($IP.PadRight($Width - 9)) #" -ForegroundColor White
     Write-Host "#  SSH User:      $($SSHUser.PadRight($Width - 9)) #" -ForegroundColor White
-    Write-Host "#  Auth Method:   SSH Private Key                        #" -ForegroundColor White
+    Write-Host "#  Auth Method:   SSH Private Key                         #" -ForegroundColor White
     Write-Host "# ---------------------------------------------------------" -ForegroundColor $Color
     Write-Host ""
 }
